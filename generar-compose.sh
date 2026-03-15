@@ -11,7 +11,9 @@ file_out="$1"
 clients_qty=$2
 
 # creamos el header para el compose y se lo insertamos al archivo de salida
-# update ej2: le agrego el volumen para el config.ini del server, entonces se puede modificar sin rebuildear la imagen
+# updates ej2:
+#   - le agrego el volumen para el config.ini del server, entonces se puede modificar sin rebuildear la imagen
+#   - quito la env var de log_level debug porque el test pide info
 cat > "$file_out" <<EOF
 name: tp0
 services:
@@ -21,7 +23,6 @@ services:
     entrypoint: python3 /main.py
     environment:
       PYTHONUNBUFFERED: 1
-      LOGGING_LEVEL: DEBUG
     networks:
       - testing_net
     volumes:
@@ -29,7 +30,9 @@ services:
 EOF
 
 # le sumo al archivo de salida la config por client
-# update ej2: le agrego el volumen para el config.yaml de cada client, entonces se puede modificar sin rebuildear la imagen
+# update ej2:
+#   - le agrego el volumen para el config.yaml de cada client, entonces se puede modificar sin rebuildear la imagen
+#   - quito la env var de log_level debug porque el test pide info
 for ((i=1;i<=clients_qty;i++)); do
 cat >> "$file_out" <<EOF
 
@@ -39,7 +42,6 @@ cat >> "$file_out" <<EOF
     entrypoint: /client
     environment:
       CLI_ID: $i
-      CLI_LOG_LEVEL: DEBUG
     networks:
       - testing_net
     depends_on:
