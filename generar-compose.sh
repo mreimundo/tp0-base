@@ -7,11 +7,12 @@ if [ "$#" -ne 2 ]; then
   exit 1
 fi
 
-file_out=$1
+file_out="$1"
 clients_qty=$2
 
 # creamos el header para el compose y se lo insertamos al archivo de salida
 cat > "$file_out" <<EOF
+name: tp0
 services:
   server:
     container_name: server
