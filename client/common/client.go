@@ -53,31 +53,23 @@ func (c *Client) createClientSocket() error {
 func (c *Client) StartClientLoop() {
 	// seteo un channel para escuchar SIGTERM y poder interrumpir el loop de envío de mensajes
 	sigs := make(chan os.Signal, 1)
-    signal.Notify(sigs, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGTERM)
 
-	// ej4: agrego para que escuche a SIGTERM sin importar si el main loop está bloqueado por ReadString por ej. 
+	// ej4: agrego para que escuche a SIGTERM sin importar si el main loop está bloqueado por ReadString por ej.
 	go func() {
-        <-sigs
-        log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
-        if c.conn != nil {
-            c.conn.Close()
-            log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
-        }
-        log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
-        os.Exit(0)
-    }()
+		<-sigs
+		log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
+		if c.conn != nil {
+			c.conn.Close()
+			log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+		}
+		log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+		os.Exit(0)
+	}()
 
 	// There is an autoincremental msgID to identify every message sent
 	// Messages if the message amount threshold has not been surpassed
 	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
- 		// chequeo SIGTERM antes de iterar
-        select {
-        case <-sigs:
-            log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
-            break loop
-        default:
-        }
-
 		// Create the connection the server in every loop iteration. Send an
 		c.createClientSocket()
 
@@ -101,21 +93,8 @@ func (c *Client) StartClientLoop() {
 		)
 
 		// Wait a time between sending one message and the next one
-		//time.Sleep(c.config.LoopPeriod) -> comento porque pruebo cambiarlo por un refactor: loop period interrumpible por SIGTERM
-		select {
-		case <-sigs:
-			log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
-			break loop
-		case <-time.After(c.config.LoopPeriod):
-		}
-
+		time.Sleep(c.config.LoopPeriod)
 	}
-
-	// cierro conexión si quedó abierta al recibir SIGTERM
-    if c.conn != nil {
-        c.conn.Close()
-        log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
-    }
 
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
