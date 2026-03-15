@@ -11,6 +11,7 @@ file_out="$1"
 clients_qty=$2
 
 # creamos el header para el compose y se lo insertamos al archivo de salida
+# update ej2: le agrego el volumen para el config.ini del server, entonces se puede modificar sin rebuildear la imagen
 cat > "$file_out" <<EOF
 name: tp0
 services:
@@ -23,9 +24,12 @@ services:
       LOGGING_LEVEL: DEBUG
     networks:
       - testing_net
+    volumes:
+      - ./server/config.ini:/config.ini
 EOF
 
 # le sumo al archivo de salida la config por client
+# update ej2: le agrego el volumen para el config.yaml de cada client, entonces se puede modificar sin rebuildear la imagen
 for ((i=1;i<=clients_qty;i++)); do
 cat >> "$file_out" <<EOF
 
@@ -40,6 +44,8 @@ cat >> "$file_out" <<EOF
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
 EOF
 done
 
