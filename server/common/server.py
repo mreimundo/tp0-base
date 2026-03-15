@@ -1,5 +1,6 @@
 import socket
 import logging
+import signal
 
 
 class Server:
@@ -8,6 +9,14 @@ class Server:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
+        self._running = True
+        signal.signal(signal.SIGTERM, self.__handle_sigterm)
+
+    def __handle_sigterm(self, sig, frame):
+        logging.info("action: receive_sigterm | result: success")
+        self._running = False
+        self._server_socket.close()
+        logging.info("action: close_server_socket | result: success")
 
     def run(self):
         """
@@ -18,11 +27,14 @@ class Server:
         finishes, servers starts to accept new connections again
         """
 
-        # TODO: Modify this program to handle signal to graceful shutdown
-        # the server
-        while True:
-            client_sock = self.__accept_new_connection()
-            self.__handle_client_connection(client_sock)
+        while self._running:
+            try:
+                client_sock = self.__accept_new_connection()
+                self.__handle_client_connection(client_sock)
+            except OSError:
+                # accept() lanza OSError cuando el socket se cierra por SIGTERM
+                break
+        logging.info("action: server_shutdown | result: success")
 
     def __handle_client_connection(self, client_sock):
         """
@@ -42,6 +54,7 @@ class Server:
             logging.error("action: receive_message | result: fail | error: {e}")
         finally:
             client_sock.close()
+            logging.info("action: close_client_socket | result: success")
 
     def __accept_new_connection(self):
         """
