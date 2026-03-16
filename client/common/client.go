@@ -19,6 +19,7 @@ type ClientConfig struct {
 	ServerAddress string
 	LoopAmount    int
 	LoopPeriod    time.Duration
+	Bet 		  Bet
 }
 
 // Client Entity that encapsulates how
@@ -50,6 +51,7 @@ func (c *Client) createClientSocket() error {
 }
 
 // StartClientLoop Send messages to the client until some time threshold is met
+// ej5 update: Sends the bet to the server and waits for confirmation
 func (c *Client) StartClientLoop() {
 	// seteo un channel para escuchar SIGTERM y poder interrumpir el loop de envío de mensajes
 	sigs := make(chan os.Signal, 1)
@@ -67,61 +69,35 @@ func (c *Client) StartClientLoop() {
 		os.Exit(0)
 	}()
 
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
-	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
-		// Create the connection the server in every loop iteration. Send an
-		c.createClientSocket()
-
-		fmt.Fprintf(c.conn, "[CLIENT %v] Message N°%v\n", c.config.ID, msgID)
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-		c.conn.Close()
-		log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
-		c.conn = nil
-
-		if err != nil {
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			return
-		}
-
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
-
-		// Wait a time between sending one message and the next one
-		time.Sleep(c.config.LoopPeriod)
+	// ej5 update: quito loop por cantidad de mensajes y envío un solo mensaje con bet
+	if err := c.createClientSocket(); err != nil {
+		return
 	}
 
+	if err := SendBet(c.conn, c.config.ID, c.config.Bet); err != nil {
+		log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		c.conn.Close()
+		c.conn = nil
+		return
+	}
+
+	confirmation, err := RecvConfirmation(c.conn)
+	c.conn.Close()
+	log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+	c.conn = nil
+
+	if err != nil {
+		log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		return
+	}
+
+	if confirmation == "OK" {
+		log.Infof("action: apuesta_enviada | result: success | dni: %v | numero: %v",
+			c.config.Bet.Document, c.config.Bet.Number)
+	}
+
+
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
-}
-
-// Send all the data in a short write scenario.
-func SendAll(conn net.Conn, data []byte) error {
-    total := 0
-    for total < len(data) {
-        n, err := conn.Write(data[total:])
-        if err != nil {
-            return err
-        }
-        total += n
-    }
-    return nil
-}
-
-// RecvAll receives all the data in a short read scenario.
-func RecvAll(conn net.Conn, n int) ([]byte, error) {
-    buf := make([]byte, n)
-    total := 0
-    for total < n {
-        read, err := conn.Read(buf[total:])
-        if err != nil {
-            return nil, err
-        }
-        total += read
-    }
-    return buf, nil
 }

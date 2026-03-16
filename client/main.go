@@ -106,8 +106,14 @@ func main() {
 	clientConfig := common.ClientConfig{
 		ServerAddress: v.GetString("server.address"),
 		ID:            v.GetString("id"),
-		LoopAmount:    v.GetInt("loop.amount"),
 		LoopPeriod:    v.GetDuration("loop.period"),
+		Bet: common.Bet{
+			FirstName: os.Getenv("NOMBRE"),
+			LastName:  os.Getenv("APELLIDO"),
+			Document:  os.Getenv("DOCUMENTO"),
+			Birthdate: os.Getenv("NACIMIENTO"),
+			Number:    os.Getenv("NUMERO"),
+		},
 	}
 
 	client := common.NewClient(clientConfig)
