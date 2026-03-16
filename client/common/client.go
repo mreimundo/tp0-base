@@ -15,7 +15,6 @@ type ClientConfig struct {
 	ID            string
 	ServerAddress string
 	LoopAmount    int
-	LoopPeriod    time.Duration
 	Bet 		  Bet
 }
 

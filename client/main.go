@@ -106,7 +106,6 @@ func main() {
 	clientConfig := common.ClientConfig{
 		ServerAddress: v.GetString("server.address"),
 		ID:            v.GetString("id"),
-		LoopPeriod:    v.GetDuration("loop.period"),
 		Bet: common.Bet{
 			FirstName: os.Getenv("NOMBRE"),
 			LastName:  os.Getenv("APELLIDO"),
