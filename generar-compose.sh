@@ -42,12 +42,17 @@ cat >> "$file_out" <<EOF
     entrypoint: /client
     environment:
       CLI_ID: $i
+      NOMBRE: "Nombre$i"
+      APELLIDO: "Apellido$i"
+      DOCUMENTO: "3090446$i"
+      NACIMIENTO: "1990-01-0$i"
+      NUMERO: "757$i"
+    volumes:
+      - ./client/config.yaml:/config.yaml
     networks:
       - testing_net
     depends_on:
       - server
-    volumes:
-      - ./client/config.yaml:/config.yaml
 EOF
 done
 
