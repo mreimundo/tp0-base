@@ -26,7 +26,7 @@ def recv_all(sock, n: int) -> bytes:
 
 
 def recv_bet(sock):
-    """Receives a bet: reads 2-byte header then payload, returns field list"""
+    """Receives a bet: reads 2-byte header then payload, returns field list. !H codifies using big-endian"""
     header = recv_all(sock, HEADER_SIZE)
     length = struct.unpack('!H', header)[0]
     payload = recv_all(sock, length).decode('utf-8')
