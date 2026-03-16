@@ -98,3 +98,30 @@ func (c *Client) StartClientLoop() {
 
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
+
+// Send all the data in a short write scenario.
+func SendAll(conn net.Conn, data []byte) error {
+    total := 0
+    for total < len(data) {
+        n, err := conn.Write(data[total:])
+        if err != nil {
+            return err
+        }
+        total += n
+    }
+    return nil
+}
+
+// RecvAll receives all the data in a short read scenario.
+func RecvAll(conn net.Conn, n int) ([]byte, error) {
+    buf := make([]byte, n)
+    total := 0
+    for total < n {
+        read, err := conn.Read(buf[total:])
+        if err != nil {
+            return nil, err
+        }
+        total += read
+    }
+    return buf, nil
+}
