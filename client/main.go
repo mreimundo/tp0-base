@@ -103,16 +103,13 @@ func main() {
 	// Print program config with debugging purposes
 	PrintConfig(v)
 
+	v.BindEnv("batch", "maxAmount")
+
 	clientConfig := common.ClientConfig{
-		ServerAddress: v.GetString("server.address"),
-		ID:            v.GetString("id"),
-		Bet: common.Bet{
-			FirstName: os.Getenv("NOMBRE"),
-			LastName:  os.Getenv("APELLIDO"),
-			Document:  os.Getenv("DOCUMENTO"),
-			Birthdate: os.Getenv("NACIMIENTO"),
-			Number:    os.Getenv("NUMERO"),
-		},
+		ServerAddress:  v.GetString("server.address"),
+		ID:             v.GetString("id"),
+		MaxBatchAmount: v.GetInt("batch.maxAmount"),
+		DataFilePath:   "/agency.csv",
 	}
 
 	client := common.NewClient(clientConfig)
