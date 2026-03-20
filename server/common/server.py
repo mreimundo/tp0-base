@@ -1,9 +1,9 @@
 import socket
 import logging
 import signal
-from common.protocol import recv_bet, send_confirmation
 from common.utils import Bet, store_bets
-
+from common.protocol import recv_batch, send_batch_ack
+from common.utils import Bet, store_bets
 
 class Server:
     def __init__(self, port, listen_backlog):
@@ -39,25 +39,24 @@ class Server:
         logging.info("action: server_shutdown | result: success")
 
     def __handle_client_connection(self, client_sock):
-        """
-        Read message from a specific client socket and closes the socket
-
-        If a problem arises in the communication with the client, the
-        client socket will also be closed
-        """
-        # ej5 update: con esto debería evitar los short read-write
         try:
-            fields = recv_bet(client_sock)
-            agency, first_name, last_name, document, birthdate, number = fields
-            bet = Bet(agency, first_name, last_name, document, birthdate, number)
-            store_bets([bet])
-            logging.info(f'action: apuesta_almacenada | result: success | dni: {document} | numero: {number}')
-            send_confirmation(client_sock)
+            while True:
+                bets_data = recv_batch(client_sock)
+                if bets_data is None:
+                    break  # cliente terminó de enviar
+
+                bets = [Bet(b['agency'], b['first_name'], b['last_name'],
+                            b['document'], b['birthdate'], b['number'])
+                        for b in bets_data]
+                store_bets(bets)
+                logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+                send_batch_ack(client_sock, True)
         except OSError as e:
-            logging.error(f"action: apuesta_almacenada | result: fail | error: {e}")
+            logging.error(f'action: apuesta_recibida | result: fail | error: {e}')
+            send_batch_ack(client_sock, False)
         finally:
             client_sock.close()
-            logging.info("action: close_client_socket | result: success")
+            logging.info('action: close_client_socket | result: success')
 
     def __accept_new_connection(self):
         """
