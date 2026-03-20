@@ -63,7 +63,7 @@ func encodeBet(agencyID string, bet Bet) ([]byte, error) {
 	fname := []byte(bet.FirstName)
 	lname := []byte(bet.LastName)
 
-	// fixed: 1+4+4+2+1+1 = 13 bytes + variable
+	// fixed OH: 1+4+4+2+1+1 = 13B variable
 	buf := make([]byte, 13+len(fname)+len(lname))
 	buf[0] = byte(agency)
 	binary.BigEndian.PutUint32(buf[1:5], uint32(doc))
@@ -77,18 +77,18 @@ func encodeBet(agencyID string, bet Bet) ([]byte, error) {
 }
 
 // SendBatch serializes and sends a batch:
-// [2B payload_length][2B bet_count][encoded bets...]
+// [2B payload_length][2B bet_count][encoded_bet1.., encoded_betN]
 func SendBatch(conn net.Conn, agencyID string, bets []Bet) error {
 	countBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(countBuf, uint16(len(bets)))
 	payload := countBuf
 
 	for _, bet := range bets {
-		encoded, err := encodeBet(agencyID, bet)
+		encodedBet, err := encodeBet(agencyID, bet)
 		if err != nil {
 			return err
 		}
-		payload = append(payload, encoded...)
+		payload = append(payload, encodedBet...)
 	}
 
 	header := make([]byte, 2)
