@@ -2,12 +2,15 @@ package common
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
-	"strings"
+	"strconv"
+	"time"
 )
 
-const separator = "|" // it could be any char but this one is not likely to be expected
+const (
+	StatusOK    = byte(0x00)
+	StatusError = byte(0x01)
+)
 
 // SendAll sends all bytes avoiding short-write
 func SendAll(conn net.Conn, data []byte) error {
@@ -36,36 +39,71 @@ func RecvAll(conn net.Conn, n int) ([]byte, error) {
 	return buf, nil
 }
 
-// SendBet serializes and sends a bet using length-prefix framing:
-// [ 2-byte big-endian length ][ agency|nombre|apellido|documento|nacimiento|numero ]
-func SendBet(conn net.Conn, agencyID string, bet Bet) error {
-	payload := fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s",
-		agencyID, separator,
-		bet.FirstName, separator,
-		bet.LastName, separator,
-		bet.Document, separator,
-		bet.Birthdate, separator,
-		bet.Number,
-	)
-	data := []byte(payload)
+// encodeBet serializes a single bet using mixed TLV encoding:
+// [1B agency][4B doc][4B birthdate YYYYMMDD][2B number][1B fname_len][fname][1B lname_len][lname]
+func encodeBet(agencyID string, bet Bet) ([]byte, error) {
+	agency, err := strconv.ParseUint(agencyID, 10, 8)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := strconv.ParseUint(bet.Document, 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	number, err := strconv.ParseUint(bet.Number, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+	t, err := time.Parse("2006-01-02", bet.Birthdate)
+	if err != nil {
+		return nil, err
+	}
+	birthdate := uint32(t.Year())*10000 + uint32(t.Month())*100 + uint32(t.Day())
+
+	fname := []byte(bet.FirstName)
+	lname := []byte(bet.LastName)
+
+	// fixed: 1+4+4+2+1+1 = 13 bytes + variable
+	buf := make([]byte, 13+len(fname)+len(lname))
+	buf[0] = byte(agency)
+	binary.BigEndian.PutUint32(buf[1:5], uint32(doc))
+	binary.BigEndian.PutUint32(buf[5:9], birthdate)
+	binary.BigEndian.PutUint16(buf[9:11], uint16(number))
+	buf[11] = byte(len(fname))
+	copy(buf[12:12+len(fname)], fname)
+	buf[12+len(fname)] = byte(len(lname))
+	copy(buf[13+len(fname):], lname)
+	return buf, nil
+}
+
+// SendBatch serializes and sends a batch:
+// [2B payload_length][2B bet_count][encoded bets...]
+func SendBatch(conn net.Conn, agencyID string, bets []Bet) error {
+	countBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(countBuf, uint16(len(bets)))
+	payload := countBuf
+
+	for _, bet := range bets {
+		encoded, err := encodeBet(agencyID, bet)
+		if err != nil {
+			return err
+		}
+		payload = append(payload, encoded...)
+	}
+
 	header := make([]byte, 2)
-	binary.BigEndian.PutUint16(header, uint16(len(data)))
+	binary.BigEndian.PutUint16(header, uint16(len(payload)))
 	if err := SendAll(conn, header); err != nil {
 		return err
 	}
-	return SendAll(conn, data)
+	return SendAll(conn, payload)
 }
 
-// RecvConfirmation reads the server's response (length-prefix framing)
-func RecvConfirmation(conn net.Conn) (string, error) {
-	header, err := RecvAll(conn, 2)
+// RecvBatchAck reads the 1-byte status response from the server
+func RecvBatchAck(conn net.Conn) (bool, error) {
+	buf, err := RecvAll(conn, 1)
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	length := binary.BigEndian.Uint16(header)
-	payload, err := RecvAll(conn, int(length))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(payload)), nil
+	return buf[0] == StatusOK, nil
 }
