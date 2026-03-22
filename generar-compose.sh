@@ -23,6 +23,7 @@ services:
     entrypoint: python3 /main.py
     environment:
       PYTHONUNBUFFERED: 1
+      SERVER_AGENCIES: $clients_qty
     networks:
       - testing_net
     volumes:

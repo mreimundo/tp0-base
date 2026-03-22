@@ -7,10 +7,9 @@ from common.protocol import (
     send_batch_ack, send_done_ack, send_winners, send_not_ready,
     MSG_BATCH, MSG_DONE, MSG_QUERY
 )
-TOTAL_AGENCIES = 5
 
 class Server:
-    def __init__(self, port, listen_backlog):
+    def __init__(self, port, listen_backlog, total_agencies):
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
@@ -18,6 +17,7 @@ class Server:
         self._agencies_done = set()
         self._lottery_done  = False
         self._winners = {}
+        self._total_agencies = total_agencies
         signal.signal(signal.SIGTERM, self.__handle_sigterm)
 
     def __handle_sigterm(self, sig, frame):
@@ -61,7 +61,7 @@ class Server:
                 elif msg_type == MSG_DONE:
                     agency_id = recv_done(client_sock)
                     self._agencies_done.add(agency_id)
-                    if len(self._agencies_done) == TOTAL_AGENCIES:
+                    if len(self._agencies_done) == self._total_agencies:
                         self.__run_lottery()
                     send_done_ack(client_sock)
                     break  # cliente se reconecta para consultar
