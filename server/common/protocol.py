@@ -3,6 +3,12 @@ import struct
 HEADER_SIZE = 2
 STATUS_OK = b'\x00'
 STATUS_ERROR = b'\x01'
+MSG_BATCH = 0x01
+MSG_DONE  = 0x02
+MSG_QUERY = 0x03
+
+QUERY_READY     = 0x00
+QUERY_NOT_READY = 0x01
 
 
 def send_all(sock, data: bytes):
@@ -61,16 +67,20 @@ def _decode_bet(data: bytes, offset: int):
     }, offset
 
 
-def recv_batch(sock):
-    """Receives one batch. Returns list of bet dicts, or None on clean close.
-    Frame: [2B payload_length][2B bet_count][bets...]"""
-    try:
-        header = recv_all(sock, HEADER_SIZE)
-    except OSError:
-        return None  # el cliente cerró la conexión gracefully
+def send_batch_ack(sock, success: bool = True):
+    """Sends 1-byte ACK: 0x00=OK, 0x01=ERROR"""
+    send_all(sock, STATUS_OK if success else STATUS_ERROR)
+    
+
+def recv_msg_type(sock) -> int:
+    return recv_all(sock, 1)[0]
+
+
+def recv_batch_payload(sock):
+    """Called after MSG_BATCH type byte is already consumed"""
+    header = recv_all(sock, HEADER_SIZE)
     length = struct.unpack('!H', header)[0]
     payload = recv_all(sock, length)
-
     count = struct.unpack_from('!H', payload, 0)[0]
     offset = 2
     bets = []
@@ -80,6 +90,28 @@ def recv_batch(sock):
     return bets
 
 
-def send_batch_ack(sock, success: bool = True):
-    """Sends 1-byte ACK: 0x00=OK, 0x01=ERROR"""
-    send_all(sock, STATUS_OK if success else STATUS_ERROR)
+def recv_done(sock) -> int:
+    """Reads agency_id from DONE payload"""
+    return recv_all(sock, 1)[0]
+
+
+def recv_query(sock) -> int:
+    """Reads agency_id from QUERY payload"""
+    return recv_all(sock, 1)[0]
+
+
+def send_done_ack(sock):
+    send_all(sock, STATUS_OK)
+    
+    
+def send_winners(sock, docs: list):
+    """[1B READY][2B count][4B doc * count]"""
+    buf = bytes([QUERY_READY])
+    buf += struct.pack('!H', len(docs))
+    for doc in docs:
+        buf += struct.pack('!I', int(doc))
+    send_all(sock, buf)
+
+
+def send_not_ready(sock):
+    send_all(sock, bytes([QUERY_NOT_READY]))

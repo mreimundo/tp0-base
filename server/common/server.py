@@ -1,17 +1,23 @@
 import socket
 import logging
 import signal
-from common.utils import Bet, store_bets
-from common.protocol import recv_batch, send_batch_ack
-from common.utils import Bet, store_bets
+from common.utils import Bet, store_bets, load_bets, has_won
+from common.protocol import (
+    recv_msg_type, recv_batch_payload, recv_done, recv_query,
+    send_batch_ack, send_done_ack, send_winners, send_not_ready,
+    MSG_BATCH, MSG_DONE, MSG_QUERY
+)
+TOTAL_AGENCIES = 5
 
 class Server:
     def __init__(self, port, listen_backlog):
-        # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
         self._running = True
+        self._agencies_done = set()
+        self._lottery_done  = False
+        self._winners = {}
         signal.signal(signal.SIGTERM, self.__handle_sigterm)
 
     def __handle_sigterm(self, sig, frame):
@@ -41,19 +47,35 @@ class Server:
     def __handle_client_connection(self, client_sock):
         try:
             while True:
-                bets_data = recv_batch(client_sock)
-                if bets_data is None:
-                    break  # cliente terminó de enviar
+                msg_type = recv_msg_type(client_sock)
 
-                bets = [Bet(b['agency'], b['first_name'], b['last_name'],
-                            b['document'], b['birthdate'], b['number'])
-                        for b in bets_data]
-                store_bets(bets)
-                logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
-                send_batch_ack(client_sock, True)
+                if msg_type == MSG_BATCH:
+                    bets_data = recv_batch_payload(client_sock)
+                    bets = [Bet(b['agency'], b['first_name'], b['last_name'],
+                                b['document'], b['birthdate'], b['number'])
+                            for b in bets_data]
+                    store_bets(bets)
+                    logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+                    send_batch_ack(client_sock, True)
+
+                elif msg_type == MSG_DONE:
+                    agency_id = recv_done(client_sock)
+                    self._agencies_done.add(agency_id)
+                    if len(self._agencies_done) == TOTAL_AGENCIES:
+                        self.__run_lottery()
+                    send_done_ack(client_sock)
+                    break  # cliente se reconecta para consultar
+
+                elif msg_type == MSG_QUERY:
+                    agency_id = recv_query(client_sock)
+                    if not self._lottery_done:
+                        send_not_ready(client_sock)
+                    else:
+                        send_winners(client_sock, self._winners.get(agency_id, []))
+                    break
+
         except OSError as e:
-            logging.error(f'action: apuesta_recibida | result: fail | error: {e}')
-            send_batch_ack(client_sock, False)
+            logging.error(f'action: receive_message | result: fail | error: {e}')
         finally:
             client_sock.close()
             logging.info('action: close_client_socket | result: success')
