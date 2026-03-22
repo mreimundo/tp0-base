@@ -94,30 +94,10 @@ class Server:
         logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
         return c
     
-    def send_all(sock, data: bytes):
-        """
-        Send all data to the socket
-        
-        short-write is possible when the socket buffer is full,
-        so we need to loop until all data is sent
-        """
-        total = 0
-        while total < len(data):
-            sent = sock.send(data[total:])
-            if sent == 0:
-                raise OSError("Connection broken")
-            total += sent
 
-    def recv_all(sock, n: int) -> bytes:
-        """
-        Read n bytes from the socket
-        
-        Avoids short-read by looping until all n bytes are read
-        """
-        data = b''
-        while len(data) < n:
-            chunk = sock.recv(n - len(data))
-            if not chunk:
-                raise OSError("Connection broken")
-            data += chunk
-        return data
+    def __run_lottery(self):
+        for bet in load_bets():
+            if has_won(bet):
+                self._winners.setdefault(bet.agency, []).append(bet.document)
+        self._lottery_done = True
+        logging.info("action: sorteo | result: success")

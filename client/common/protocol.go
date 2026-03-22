@@ -10,6 +10,9 @@ import (
 const (
 	StatusOK    = byte(0x00)
 	StatusError = byte(0x01)
+    MsgBatch 	= byte(0x01)
+    MsgDone  	= byte(0x02)
+    MsgQuery 	= byte(0x03)
 )
 
 // SendAll sends all bytes avoiding short-write
@@ -76,28 +79,6 @@ func encodeBet(agencyID string, bet Bet) ([]byte, error) {
 	return buf, nil
 }
 
-// SendBatch serializes and sends a batch:
-// [2B payload_length][2B bet_count][encoded_bet1.., encoded_betN]
-func SendBatch(conn net.Conn, agencyID string, bets []Bet) error {
-	countBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(countBuf, uint16(len(bets)))
-	payload := countBuf
-
-	for _, bet := range bets {
-		encodedBet, err := encodeBet(agencyID, bet)
-		if err != nil {
-			return err
-		}
-		payload = append(payload, encodedBet...)
-	}
-
-	header := make([]byte, 2)
-	binary.BigEndian.PutUint16(header, uint16(len(payload)))
-	if err := SendAll(conn, header); err != nil {
-		return err
-	}
-	return SendAll(conn, payload)
-}
 
 // RecvBatchAck reads the 1-byte status response from the server
 func RecvBatchAck(conn net.Conn) (bool, error) {
@@ -106,4 +87,66 @@ func RecvBatchAck(conn net.Conn) (bool, error) {
 		return false, err
 	}
 	return buf[0] == StatusOK, nil
+}
+
+// SendBatch ahora incluye el tipo de mensaje como primer byte
+func SendBatch(conn net.Conn, agencyID string, bets []Bet) error {
+    countBuf := make([]byte, 2)
+    binary.BigEndian.PutUint16(countBuf, uint16(len(bets)))
+    payload := countBuf
+
+    for _, bet := range bets {
+        encoded, err := encodeBet(agencyID, bet)
+        if err != nil {
+            return err
+        }
+        payload = append(payload, encoded...)
+    }
+
+    header := make([]byte, 2)
+    binary.BigEndian.PutUint16(header, uint16(len(payload)))
+
+    frame := append([]byte{MsgBatch}, header...)
+    frame  = append(frame, payload...)
+    return SendAll(conn, frame)
+}
+
+// SendDone notifica al servidor que la agencia terminó de enviar apuestas
+func SendDone(conn net.Conn, agencyID string) error {
+    agency, _ := strconv.ParseUint(agencyID, 10, 8)
+    return SendAll(conn, []byte{MsgDone, byte(agency)})
+}
+
+// SendQueryWinners consulta los ganadores de la agencia.
+// Retorna (ready, []dni, error). Si ready=false, el sorteo no ocurrió aún.
+func SendQueryWinners(conn net.Conn, agencyID string) (bool, []string, error) {
+    agency, _ := strconv.ParseUint(agencyID, 10, 8)
+    if err := SendAll(conn, []byte{MsgQuery, byte(agency)}); err != nil {
+        return false, nil, err
+    }
+
+    status, err := RecvAll(conn, 1)
+    if err != nil {
+        return false, nil, err
+    }
+    if status[0] != 0x00 { // QUERY_NOT_READY
+        return false, nil, nil
+    }
+
+    countBuf, err := RecvAll(conn, 2)
+    if err != nil {
+        return false, nil, err
+    }
+    count := binary.BigEndian.Uint16(countBuf)
+
+    winners := make([]string, 0, count)
+    for i := 0; i < int(count); i++ {
+        docBuf, err := RecvAll(conn, 4)
+        if err != nil {
+            return false, nil, err
+        }
+        doc := binary.BigEndian.Uint32(docBuf)
+        winners = append(winners, strconv.FormatUint(uint64(doc), 10))
+    }
+    return true, winners, nil
 }

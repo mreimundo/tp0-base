@@ -7,6 +7,7 @@ import (
     "os/signal"
 	"strings"
     "syscall"
+	"time"
 	"github.com/op/go-logging"
 )
 
@@ -77,69 +78,98 @@ func (c *Client) sendBatch(batch []Bet) error {
 // ej6 update: createClientSocket now returns an error instead of exiting the program, so the caller can decide how to handle it (e.g. retry, log and exit, etc.)
 // StartClientLoop reads bets from CSV and sends them in batches to the server
 func (c *Client) StartClientLoop() {
-	// seteo un channel para escuchar SIGTERM y poder interrumpir el loop de envío de mensajes
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM)
+    sigs := make(chan os.Signal, 1)
+    signal.Notify(sigs, syscall.SIGTERM)
 
-	// ej4: agrego para que escuche a SIGTERM sin importar si el main loop está bloqueado
-	go func() {
-		<-sigs
-		log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
-		if c.conn != nil {
-			c.conn.Close()
-			log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
-		}
-		log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
-		os.Exit(0)
-	}()
+    // ej4: goroutine dedicada al shutdown
+    go func() {
+        <-sigs
+        log.Infof("action: receive_sigterm | result: success | client_id: %v", c.config.ID)
+        if c.conn != nil {
+            c.conn.Close()
+            log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+        }
+        log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+        os.Exit(0)
+    }()
 
-	if err := c.createClientSocket(); err != nil {
-		return
-	}
+    // 1: envío de apuestas + notificación DONE
+    if err := c.createClientSocket(); err != nil {
+        return
+    }
 
-	file, err := os.Open(c.config.DataFilePath)
-	if err != nil {
-		log.Errorf("action: open_file | result: fail | client_id: %v | error: %v",
-			c.config.ID, err)
-		c.conn.Close()
-		c.conn = nil
-		return
-	}
-	defer file.Close()
+    file, err := os.Open(c.config.DataFilePath)
+    if err != nil {
+        log.Errorf("action: open_file | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        c.conn.Close()
+        c.conn = nil
+        return
+    }
+    defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	batch := make([]Bet, 0, c.config.MaxBatchAmount)
+    scanner := bufio.NewScanner(file)
+    batch := make([]Bet, 0, c.config.MaxBatchAmount)
 
-	for scanner.Scan() {
-		fields := strings.Split(scanner.Text(), ",")
-		if len(fields) != 5 {
-			continue
-		}
-		batch = append(batch, Bet{
-			FirstName: fields[0],
-			LastName:  fields[1],
-			Document:  fields[2],
-			Birthdate: fields[3],
-			Number:    fields[4],
-		})
+    for scanner.Scan() {
+        fields := strings.Split(scanner.Text(), ",")
+        if len(fields) != 5 {
+            continue
+        }
+        batch = append(batch, Bet{
+            FirstName: fields[0],
+            LastName:  fields[1],
+            Document:  fields[2],
+            Birthdate: fields[3],
+            Number:    fields[4],
+        })
+        if len(batch) >= c.config.MaxBatchAmount {
+            if err := c.sendBatch(batch); err != nil {
+                return
+            }
+            batch = batch[:0]
+        }
+    }
+    if len(batch) > 0 {
+        if err := c.sendBatch(batch); err != nil {
+            return
+        }
+    }
 
-		if len(batch) >= c.config.MaxBatchAmount {
-			if err := c.sendBatch(batch); err != nil {
-				return
-			}
-			batch = batch[:0]
-		}
-	}
+    if err := SendDone(c.conn, c.config.ID); err != nil {
+        log.Errorf("action: done_enviado | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        c.conn.Close()
+        c.conn = nil
+        return
+    }
+    RecvAll(c.conn, 1) // ACK del DONE
+    c.conn.Close()
+    log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+    c.conn = nil
 
-	// enviar el último batch si quedaron apuestas
-	if len(batch) > 0 {
-		if err := c.sendBatch(batch); err != nil {
-			return
-		}
-	}
+    // 2: consulta de ganadores con reintentos hasta que el sorteo esté listo
+    for {
+        if err := c.createClientSocket(); err != nil {
+            return
+        }
 
-	c.conn.Close()
-	log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
-	c.conn = nil
-	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+        ready, winners, err := SendQueryWinners(c.conn, c.config.ID)
+        c.conn.Close()
+        log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+        c.conn = nil
+
+        if err != nil {
+            log.Errorf("action: consulta_ganadores | result: fail | client_id: %v | error: %v",
+                c.config.ID, err)
+            return
+        }
+        if !ready {
+            time.Sleep(1 * time.Second) // el sorteo aún no ocurrió, reintentar
+            continue
+        }
+
+        log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %v", len(winners))
+        break
+    }
+
+    log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
