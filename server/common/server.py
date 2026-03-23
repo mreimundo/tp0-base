@@ -7,6 +7,8 @@ from common.protocol import (
     send_batch_ack, send_done_ack, send_winners, send_not_ready,
     MSG_BATCH, MSG_DONE, MSG_QUERY
 )
+from multiprocessing import Process, Barrier, Lock, Value, Manager
+
 
 class Server:
     def __init__(self, port, listen_backlog, total_agencies):
@@ -14,10 +16,12 @@ class Server:
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
         self._running = True
-        self._agencies_done = set()
-        self._lottery_done  = False
-        self._winners = {}
         self._total_agencies = total_agencies
+        self._barrier = Barrier(total_agencies)
+        self._store_lock = Lock()
+        self._lottery_done = Value('b', False)
+        self._manager = Manager()
+        self._winners = self._manager.dict()
         signal.signal(signal.SIGTERM, self.__handle_sigterm)
 
     def __handle_sigterm(self, sig, frame):
@@ -37,8 +41,11 @@ class Server:
 
         while self._running:
             try:
-                client_sock = self.__accept_new_connection()
-                self.__handle_client_connection(client_sock)
+                client_sock, addr = self.__accept_new_connection()
+                logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+                p = Process(target=self.__handle_client_connection, args=(client_sock,))
+                p.start()
+                client_sock.close()
             except OSError:
                 # accept() lanza OSError cuando el socket se cierra por SIGTERM
                 break
@@ -54,24 +61,22 @@ class Server:
                     bets = [Bet(b['agency'], b['first_name'], b['last_name'],
                                 b['document'], b['birthdate'], b['number'])
                             for b in bets_data]
-                    store_bets(bets)
+                    # ej8 update: protejo con lock ahora que es compartida entre procesos
+                    with self._store_lock:
+                        store_bets(bets)
                     logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
                     send_batch_ack(client_sock, True)
 
                 elif msg_type == MSG_DONE:
-                    agency_id = recv_done(client_sock)
-                    self._agencies_done.add(agency_id)
-                    if len(self._agencies_done) == self._total_agencies:
-                        self.__run_lottery()
+                    recv_done(client_sock)
+                    self._barrier.wait()
+                    self.__run_lottery()
                     send_done_ack(client_sock)
                     break  # cliente se reconecta para consultar
 
                 elif msg_type == MSG_QUERY:
                     agency_id = recv_query(client_sock)
-                    if not self._lottery_done:
-                        send_not_ready(client_sock)
-                    else:
-                        send_winners(client_sock, self._winners.get(agency_id, []))
+                    send_winners(client_sock, self._winners.get(agency_id, []))
                     break
 
         except OSError as e:
@@ -92,12 +97,15 @@ class Server:
         logging.info('action: accept_connections | result: in_progress')
         c, addr = self._server_socket.accept()
         logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-        return c
-    
+        return c, addr
 
     def __run_lottery(self):
-        for bet in load_bets():
-            if has_won(bet):
-                self._winners.setdefault(bet.agency, []).append(bet.document)
-        self._lottery_done = True
-        logging.info("action: sorteo | result: success")
+        with self._store_lock:
+            if self._lottery_done.value:
+                return  # otro proceso ya lo corrió
+            for bet in load_bets():
+                if has_won(bet):
+                    current = self._winners.get(bet.agency, [])
+                    self._winners[bet.agency] = current + [bet.document]
+            self._lottery_done.value = True
+            logging.info("action: sorteo | result: success")
