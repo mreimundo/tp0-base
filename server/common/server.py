@@ -76,7 +76,10 @@ class Server:
 
                 elif msg_type == MSG_QUERY:
                     agency_id = recv_query(client_sock)
-                    send_winners(client_sock, self._winners.get(agency_id, []))
+                    if not self._lottery_done.value:
+                        send_not_ready(client_sock)
+                    else:
+                        send_winners(client_sock, self._winners.get(agency_id, []))
                     break
 
         except OSError as e:
