@@ -179,3 +179,143 @@ Se proveen [pruebas automáticas](https://github.com/7574-sistemas-distribuidos/
 
 El incumplimiento de las pruebas es condición de desaprobación, pero su cumplimiento no es suficiente para la aprobación.  Se pide a los alumnos leer atentamente y **tener en cuenta** los criterios de corrección informados  [en el campus](https://campusgrado.fi.uba.ar/mod/page/view.php?id=73393).
 Respetar el formato y contenido las entradas de logs descritas en los ejercicios, pues son las que se chequean en cada uno de los tests.
+
+
+# Resolución
+
+## Parte 1: Introducción a Docker
+
+En esta primera etapa se trabajó sobre la configuración del entorno y la ejecución del sistema distribuido utilizando Docker Compose, con el fin de afianzar/consolidar el manejo de la herramienta para futuros TPs.
+
+### Generación dinámica de clientes
+
+Se desarrolló un script `generar-compose.sh` que permite generar archivos de Docker Compose con una cantidad configurable de clientes. El script recibe como parámetros la ruta de salida y la cantidad de instancias, generando servicios con nombres client1, client2, etc., respetando el formato solicitado.
+
+### Externalización de configuración
+
+Se modificaron tanto el cliente como el servidor para que sus archivos de configuración (config.yaml y config.ini respectivamente) sean montados mediante volúmenes de Docker. De esta manera, los cambios en la configuración no requieren reconstrucción de imágenes, desacoplando la configuración del build.
+
+### Validación del servidor
+
+Se implementó el script `validar-echo-server.sh` que utiliza `netcat` dentro de un container temporal (BusyBox) para validar el comportamiento del echo server. El script envía un mensaje y verifica que la respuesta coincida exactamente, sin necesidad de exponer puertos al host, solo utiliza la network interna de Docker.
+
+### Salida graceful
+
+Se incorporó manejo de señales `SIGTERM` en cliente y servidor. En ambos casos se asegura el cierre correcto de recursos (sockets, loops, etc.), garantizando una terminación graceful. En el cliente esto se resuelve mediante una goroutine que monitorea la señal, mientras que en el servidor se implementa un handler específico que cierra el socket principal y registra el evento.
+
+## Parte 2: Comunicaciones – Lotería Nacional
+
+En esta etapa se rediseñó completamente la lógica de negocio y el protocolo 
+de comunicación entre cliente y servidor.
+
+### Diseño del protocolo
+
+Se implementó un protocolo binario propio, sin bibliotecas de serialización 
+externas. Todos los enteros se codifican en big-endian (network byte order).
+
+#### Tipos de mensaje
+
+El protocolo define tres tipos de mensaje, identificados por un byte de tipo 
+al inicio de cada frame:
+
+| Tipo    | Byte | Dirección          | Payload cliente → servidor      | Respuesta servidor → cliente        |
+|---------|------|--------------------|---------------------------------|-------------------------------------|
+| `BATCH` | 0x01 | cliente → servidor | `[2B len][2B count][bets...]`   | `[1B: 0x00=OK / 0x01=ERROR]`        |
+| `DONE`  | 0x02 | cliente → servidor | `[1B agency_id]`                | `[1B: 0x00]`                        |
+| `QUERY` | 0x03 | cliente → servidor | `[1B agency_id]`                | `[1B ready][2B count][4B doc] × N`  |
+
+#### Serialización de una apuesta (`Bet`)
+
+Cada apuesta usa un esquema mixto: campos numéricos de tamaño fijo y campos 
+de texto con length-prefix propio (TLV). Esto evita separadores y minimiza 
+el overhead por campo:
+```
+[1B agency] [4B documento] [4B fecha YYYYMMDD] [2B número]
+[1B len_nombre] [nombre...] [1B len_apellido] [apellido...]
+```
+
+El overhead fijo es de **13B** por apuesta. Con nombres típicos (~20 chars 
+en total), cada apuesta ocupa ~33B, lo que permite enviar hasta 240 apuestas por batch dentro del límite de 8KB.
+
+#### Framing de un batch completo
+
+Un mensaje `BATCH` tiene la siguiente estructura completa, desde el primer 
+byte hasta el último:
+```
+[0x01] [2B payload_len] [2B bet_count] [bet_1] [bet_2] ... [bet_N]
+  ↑           ↑                ↑              ↑
+tipo      frame_len       cantidad de      apuestas
+                           apuestas      serializadas
+```
+
+El campo `payload_len` cubre todo lo que sigue al header de longitud 
+(incluyendo `bet_count` y todas las apuestas), lo que permite al receptor 
+leer exactamente los bytes necesarios sin ambigüedad.
+
+#### Short-read y short-write
+
+Tanto cliente como servidor usan funciones `send_all`/`recv_all` implementadas que 
+iteran hasta enviar o recibir exactamente N bytes, evitando los fenómenos 
+short-read/write propios de TCP.
+
+#### Separación de responsabilidades
+
+Se definieron tres capas independientes:
+
+- **Modelo de dominio** (`Bet`): estructura de datos pura, sin conocimiento de red
+- **Capa de protocolo** (`protocol.go` / `protocol.py`): serialización, 
+  deserialización y manejo de sockets
+- **Lógica de negocio** (`client.go` / `server.py`): comportamiento de la 
+  aplicación, sin conocimiento de bytes ni longitudes
+
+#### Procesamiento por batches
+
+Los clientes leen apuestas de archivos CSV por agencia y las acumulan hasta 
+un máximo configurable (`batch.maxAmount`), enviando cada lote en un único 
+mensaje `BATCH`. El servidor procesa cada batch de forma transaccional: si 
+todas las apuestas son válidas responde `0x00`, de lo contrario `0x01`. 
+Se garantiza que ningún mensaje supere los 8KB.
+
+#### Sincronización del sorteo
+
+El cliente opera en dos fases secuenciales sobre conexiones separadas:
+
+1. **Fase de carga**: envía todos los batches y finaliza con `DONE`
+2. **Fase de consulta**: reconecta y envía `QUERY` para obtener los ganadores
+
+El servidor no ejecuta el sorteo hasta recibir `DONE` de todas las agencias, 
+garantizando que ninguna consulta devuelva resultados parciales.
+
+**Nota**: hasta esta parte la solución es secuencial. La concurrencia se 
+introduce en la Parte 3.
+
+## Parte 3: Concurrencia
+
+En esta etapa se modificó el servidor para soportar múltiples conexiones en paralelo, resolviendo correctamente los problemas de sincronización que se establecieron.
+
+### Modelo de concurrencia
+
+Se optó por utilizar **multiprocessing** en lugar de multithreading debido a las limitaciones del `GlobalInterpreterLock` (GIL) en Python, que es donde estaba escrito el server. Cada conexión es manejada por un proceso independiente, logrando paralelismo real a nivel del OS.
+
+#### Primitivas de sincronización
+
+Se utilizaron los siguientes mecanismos de IPC:
+
+- `Barrier(N)`: sincroniza el punto de encuentro de las agencias. El sorteo se ejecuta únicamente cuando todas enviaron DONE.
+- `Lock`: garantiza exclusión mutua en operaciones críticas como persistencia (store_bet) y ejecución del sorteo.
+- `Value('b')`: flag compartido para indicar si el sorteo ya fue ejecutado.
+- `Manager().dict()`: estructura compartida para coordinar estado entre procesos.
+
+#### Sincronización en `DONE`
+
+El ACK del mensaje `DONE` se difiere hasta que el sorteo ha sido ejecutado. Esto garantiza que:
+
+Cuando el cliente recibe el ACK, el sorteo ya ocurrió
+La primera consulta (`QUERY`) siempre retorna resultados válidos
+Se evita lógica adicional de reintentos innecesarios
+
+**Ventajas del enfoque**
+
+- Se evita el uso manual de contadores y locks complejos gracias a `Barrier`
+- Se logra paralelismo real sin interferencia del `GIL`
+- La solución mantiene compatibilidad con el protocolo definido en la Parte 2 sin modificar el cliente, solo se hizo concurrente modificando el server-side
