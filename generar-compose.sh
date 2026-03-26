@@ -48,7 +48,8 @@ cat >> "$file_out" <<EOF
     networks:
       - testing_net
     depends_on:
-      - server
+      server:
+        condition: service_started
 EOF
 done
 
